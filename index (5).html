@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk Subtree Proof — reference verifier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ground:#0C0F16; --panel:#141924; --panel-2:#1B2130; --line:#28304250;
+  --rule:#2A3346; --ink:#E4E9F2; --ink-dim:#8A96AC; --ink-faint:#5A6478;
+  --tile:#4C8DFF; --partial:#E8A33D; --ok:#3FBF87; --bad:#E5484D; --node:#5E6B85;
+  --display:"Space Grotesk",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--ground);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--tile)}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px 80px}
+
+/* header */
+header{border-bottom:1px solid var(--rule);padding:38px 0 26px;margin-bottom:32px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 14px}
+h1{font-family:var(--display);font-weight:700;font-size:clamp(28px,4.4vw,44px);line-height:1.06;letter-spacing:-.02em;margin:0 0 14px;max-width:20ch}
+.sub{color:var(--ink-dim);max-width:66ch;margin:0}
+.sub strong{color:var(--ink);font-weight:600}
+
+/* verdict banner */
+.verdict{margin:26px 0 0;border:1px solid var(--rule);border-left:3px solid var(--partial);background:var(--panel);padding:18px 20px;border-radius:3px}
+.verdict h2{font-family:var(--display);font-size:16px;margin:0 0 8px;letter-spacing:-.01em}
+.verdict p{margin:0 0 8px;color:var(--ink-dim);font-size:14px}
+.verdict p:last-child{margin-bottom:0}
+.verdict code{font-family:var(--mono);font-size:13px;color:var(--partial)}
+
+/* layout */
+.grid{display:grid;grid-template-columns:290px 1fr;gap:28px;align-items:start}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:3px;padding:20px}
+.panel + .panel{margin-top:18px}
+.panel h3{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 16px;font-weight:500}
+
+label{display:block;font-size:13px;color:var(--ink-dim);margin:0 0 6px}
+.field{margin-bottom:16px}
+.field:last-child{margin-bottom:0}
+input[type=range]{width:100%;accent-color:var(--tile);margin:0}
+.val{font-family:var(--mono);font-size:13px;color:var(--ink);float:right}
+button{font-family:var(--body);font-weight:600;font-size:13px;background:var(--tile);color:#08101F;border:0;padding:10px 16px;border-radius:3px;cursor:pointer;width:100%}
+button:hover{filter:brightness(1.1)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--tile);outline-offset:2px}
+button.ghost{background:transparent;color:var(--ink-dim);border:1px solid var(--rule);font-weight:500}
+button.ghost:hover{color:var(--ink);border-color:var(--ink-faint);filter:none}
+.btn-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+
+/* status */
+.status{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:13px;padding:12px 14px;border-radius:3px;border:1px solid var(--rule)}
+.status.pass{color:var(--ok);border-color:#3FBF8740;background:#3FBF870D}
+.status.fail{color:var(--bad);border-color:#E5484D40;background:#E5484D0D}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.stat{background:var(--panel);padding:14px}
+.stat .k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:6px}
+.stat .v{font-family:var(--display);font-size:21px;font-weight:500;letter-spacing:-.01em}
+.stat .v small{font-size:12px;color:var(--ink-dim);font-weight:400;font-family:var(--body)}
+
+/* tree */
+.treewrap{overflow-x:auto;padding:4px 0 8px}
+svg{display:block}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--ink-dim);margin-top:14px;font-family:var(--mono)}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+
+/* table */
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+th{text-align:left;font-weight:500;color:var(--ink-faint);font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:0 10px 9px 0;border-bottom:1px solid var(--rule)}
+td{padding:8px 10px 8px 0;border-bottom:1px solid var(--line);color:var(--ink-dim)}
+td.num{text-align:right;color:var(--ink)}
+tr:last-child td{border-bottom:0}
+.tag{font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border-radius:2px}
+.tag.partial{background:#E8A33D1A;color:var(--partial)}
+.tag.node{background:#5E6B851A;color:var(--ink-faint)}
+
+h2.sec{font-family:var(--display);font-size:19px;letter-spacing:-.01em;margin:38px 0 6px}
+p.lede{color:var(--ink-dim);margin:0 0 18px;max-width:72ch;font-size:14px}
+.foot{margin-top:44px;padding-top:22px;border-top:1px solid var(--rule);color:var(--ink-faint);font-size:12.5px;font-family:var(--mono)}
+.tamper-log{font-family:var(--mono);font-size:12.5px;margin-top:14px}
+.tamper-log div{padding:7px 0;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:baseline}
+.tamper-log div:last-child{border-bottom:0}
+.tamper-log .r{flex:none;width:66px}
+.tamper-log .r.ok{color:var(--ok)} .tamper-log .r.bad{color:var(--bad)}
+.tamper-log .why{color:var(--ink-faint);margin-left:auto;text-align:right}
+@media(prefers-reduced-motion:no-preference){
+  rect,.status{transition:opacity .18s ease}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">draft-reilly-plants-bulk-subtree-proofs · reference verifier</p>
+  <h1>Bulk subtree consistency proofs, actually run</h1>
+  <p class="sub">A working implementation of the construction in the draft, checked against direct
+  recomputation of the Merkle tree. Change the parameters and the proof is generated and verified
+  in the browser — nothing is precomputed.</p>
+
+  <div class="verdict">
+    <h2>What running it found</h2>
+    <p>The construction as published in <strong>-00</strong> does not verify. Its §3.2 laminarity argument
+    assumes every active landmark subtree is a node of the reference checkpoint's tree. Partial subtrees
+    are not: per MTC §4.2, a partial subtree is contained in <code>MTH(D_n)</code> only when
+    <code>n == end</code>. <code>[8,13)</code> is a node at n=13 and does not exist at n=14.</p>
+    <p>This page runs a <strong>corrected</strong> construction that tiles the log with full subtrees at
+    landmark boundaries and verifies by descent. That one holds — but it is larger than -00 claimed.
+    Toggle the tree below to see partial subtrees that align to no node.</p>
+  </div>
+</header>
+
+<div class="grid">
+  <div>
+    <div class="panel">
+      <h3>Parameters</h3>
+      <div class="field">
+        <label>Log entries <span class="val" id="v-n">64</span></label>
+        <input type="range" id="n" min="8" max="512" value="64" step="1">
+      </div>
+      <div class="field">
+        <label>Entries per landmark <span class="val" id="v-every">8</span></label>
+        <input type="range" id="every" min="1" max="64" value="8" step="1">
+      </div>
+      <div class="field">
+        <label>Max active landmarks <span class="val" id="v-ma">6</span></label>
+        <input type="range" id="ma" min="1" max="40" value="6" step="1">
+      </div>
+      <button id="run">Generate and verify</button>
+      <div class="btn-row">
+        <button class="ghost" id="preset-web">Web PKI scale</button>
+        <button class="ghost" id="preset-small">Small tree</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Result</h3>
+      <div class="status" id="status"><span class="dot"></span><span id="status-t">not run</span></div>
+      <div style="margin-top:14px" class="stats" id="stats"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Tamper tests</h3>
+      <p style="font-size:13px;color:var(--ink-dim);margin:0 0 12px">
+        Each mutates a verifying proof. All must be rejected.</p>
+      <button class="ghost" id="tamper">Run tamper suite</button>
+      <div class="tamper-log" id="tamper-log"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h3>Reference tree, tiling, and landmark subtrees</h3>
+      <div class="treewrap"><svg id="tree" role="img" aria-label="Merkle tree with proof tiling"></svg></div>
+      <div class="legend">
+        <span><i style="background:var(--node)"></i>tree node</span>
+        <span><i style="background:var(--tile)"></i>proof tile (transmitted)</span>
+        <span><i style="background:transparent;border:1px solid var(--ok)"></i>landmark subtree = node</span>
+        <span><i style="background:transparent;border:1px dashed var(--partial)"></i>landmark subtree, not a node</span>
+      </div>
+      <p style="font-size:13px;color:var(--ink-dim);margin:14px 0 0" id="tree-note"></p>
+    </div>
+
+    <div class="panel">
+      <h3>Landmark subtrees</h3>
+      <div style="max-height:280px;overflow:auto">
+        <table id="subs"><thead><tr>
+          <th>range</th><th>size</th><th>status</th><th style="text-align:right">hash</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec">Size, measured rather than estimated</h2>
+<p class="lede">Baseline is one subtree consistency proof per landmark subtree, per MTC §4.4 — what
+§7.4 requires today. Bulk is the corrected construction. Both counted as transmitted hashes at 32 bytes.
+Numbers are computed live at the parameters on the left.</p>
+<div class="stats" id="size-stats"></div>
+<p class="lede" style="margin-top:16px" id="size-note"></p>
+
+<p class="foot">
+  Reference implementation for draft-reilly-plants-bulk-subtree-proofs-01 ·
+  base document: draft-ietf-plants-merkle-tree-certs-04 ·
+  source: <a href="https://github.com/lawrencejohnreilly-creator/bulk-subtree-proofs">github.com/lawrencejohnreilly-creator/bulk-subtree-proofs</a> ·
+  SHA-256, RFC 9162 §2.1 tree structure · all computation client-side
+</p>
+</div>
+
+<script>
+/* ---------- SHA-256 (sync) ---------- */
+const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+function sha256(bytes){
+  const l=bytes.length, bitLen=l*8, withOne=l+1, padLen=(((withOne+8)+63)&~63);
+  const m=new Uint8Array(padLen); m.set(bytes); m[l]=0x80;
+  const dv=new DataView(m.buffer);
+  dv.setUint32(padLen-4, bitLen>>>0); dv.setUint32(padLen-8, Math.floor(bitLen/4294967296));
+  let h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
+  const w=new Uint32Array(64);
+  for(let i=0;i<padLen;i+=64){
+    for(let t=0;t<16;t++) w[t]=dv.getUint32(i+t*4);
+    for(let t=16;t<64;t++){
+      const a=w[t-15],b=w[t-2];
+      const s0=((a>>>7)|(a<<25))^((a>>>18)|(a<<14))^(a>>>3);
+      const s1=((b>>>17)|(b<<15))^((b>>>19)|(b<<13))^(b>>>10);
+      w[t]=(w[t-16]+s0+w[t-7]+s1)>>>0;
+    }
+    let a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+    for(let t=0;t<64;t++){
+      const S1=((e>>>6)|(e<<26))^((e>>>11)|(e<<21))^((e>>>25)|(e<<7));
+      const ch=(e&f)^(~e&g), t1=(h+S1+ch+K[t]+w[t])>>>0;
+      const S0=((a>>>2)|(a<<30))^((a>>>13)|(a<<19))^((a>>>22)|(a<<10));
+      const mj=(a&b)^(a&c)^(b&c), t2=(S0+mj)>>>0;
+      h=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0;
+    }
+    h0=(h0+a)>>>0;h1=(h1+b)>>>0;h2=(h2+c)>>>0;h3=(h3+d)>>>0;
+    h4=(h4+e)>>>0;h5=(h5+f)>>>0;h6=(h6+g)>>>0;h7=(h7+h)>>>0;
+  }
+  const out=new Uint8Array(32), o=new DataView(out.buffer);
+  [h0,h1,h2,h3,h4,h5,h6,h7].forEach((v,i)=>o.setUint32(i*4,v));
+  return out;
+}
+const cat=(...a)=>{const n=a.reduce((s,x)=>s+x.length,0),r=new Uint8Array(n);let i=0;for(const x of a){r.set(x,i);i+=x.length}return r};
+const hex=b=>Array.from(b).map(x=>x.toString(16).padStart(2,"0")).join("");
+const eq=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+
+/* ---------- integer helpers (MTC §2) ---------- */
+const bitLength=n=>n<=0?0:32-Math.clz32(n);
+const bitCeil=n=>n<=1?1:1<<bitLength(n-1);
+const largestPow2Less=n=>1<<(bitLength(n-1)-1);
+const isValidSubtree=(s,e)=>s>=0&&s<e&&(s%bitCeil(e-s))===0;
+const childrenSplit=(s,e)=>(e-s)<=1?null:s+largestPow2Less(e-s);
+
+/* ---------- Merkle log (RFC 9162 §2.1) ---------- */
+class MerkleLog{
+  constructor(n){
+    this.n=n; this.entries=[];
+    for(let i=0;i<n;i++){ const b=new Uint8Array(4); new DataView(b.buffer).setUint32(0,i*2654435761>>>0); this.entries.push(b); }
+    this.memo=new Map();
+  }
+  node(s,e){
+    const k=s+":"+e; const m=this.memo.get(k); if(m) return m;
+    let h;
+    if(e-s===1) h=sha256(cat(new Uint8Array([0]), this.entries[s]));
+    else { const mid=childrenSplit(s,e); h=sha256(cat(new Uint8Array([1]), this.node(s,mid), this.node(mid,e))); }
+    this.memo.set(k,h); return h;
+  }
+  root(){ return this.node(0,this.n); }
+}
+
+/* ---------- MTC §4.5 covering ---------- */
+function findSubtrees(start,end){
+  if(end-start===1) return [[start,end]];
+  const last=end-1, split=bitLength(start^last)-1, mask=(1<<split)-1;
+  const mid=last & ~mask;
+  const leftSplit=bitLength((~start)&mask);
+  const leftStart=start & ~((1<<leftSplit)-1);
+  return [[leftStart,mid],[mid,end]];
+}
+/* ---------- frontier ---------- */
+function frontier(s,e){
+  const out=[];
+  while(s<e){ let size=1; while(s%(size*2)===0 && s+size*2<=e) size*=2; out.push([s,s+size]); s+=size; }
+  return out;
+}
+/* ---------- landmarks (MTC §6.3) ---------- */
+function activeSubtrees(n, every, maxActive){
+  const sizes=[0]; let t=0;
+  while(t<n){ t=Math.min(n,t+every); if(t>sizes[sizes.length-1]) sizes.push(t); }
+  const last=sizes.length-1, first=Math.max(1,last-maxActive+1);
+  const out=[];
+  for(let i=first;i<=last;i++){ if(sizes[i-1]<sizes[i]) out.push(...findSubtrees(sizes[i-1],sizes[i])); }
+  const seen=new Set(), uniq=[];
+  for(const r of out){ const k=r[0]+":"+r[1]; if(!seen.has(k)){seen.add(k);uniq.push(r);} }
+  uniq.sort((a,b)=>a[0]-b[0]||b[1]-a[1]);
+  return uniq;
+}
+
+/* ---------- corrected bulk proof ---------- */
+function tiling(subs, n){
+  const pts=new Set([0,n]); subs.forEach(([s,e])=>{pts.add(s);pts.add(e)});
+  const bps=[...pts].filter(p=>p>=0&&p<=n).sort((a,b)=>a-b);
+  const tiles=[];
+  for(let i=0;i<bps.length-1;i++) tiles.push(...frontier(bps[i],bps[i+1]));
+  return tiles;
+}
+function generate(log, subs, n){
+  const tiles=tiling(subs,n);
+  return { treeSize:n, subtrees:subs.map(([s,e])=>[s,e,log.node(s,e)]), tiles:tiles.map(([s,e])=>log.node(s,e)) };
+}
+function verify(proof, rootHash, n){
+  if(proof.treeSize!==n) return {ok:false,reason:"tree_size mismatch"};
+  if(!proof.subtrees.length) return {ok:false,reason:"empty subtree list"};
+  const ranges=proof.subtrees.map(([s,e])=>[s,e]);
+  const sorted=[...ranges].sort((a,b)=>a[0]-b[0]||b[1]-a[1]);
+  if(JSON.stringify(ranges)!==JSON.stringify(sorted)) return {ok:false,reason:"subtrees not in canonical order"};
+  for(const [s,e] of ranges) if(!isValidSubtree(s,e)||e>n) return {ok:false,reason:`invalid subtree [${s},${e})`};
+  const tiles=tiling(ranges,n);                       // derived, never transmitted
+  if(proof.tiles.length!==tiles.length) return {ok:false,reason:"tile count mismatch"};
+  const map=new Map(); tiles.forEach((r,i)=>map.set(r[0]+":"+r[1], proof.tiles[i]));
+  const memo=new Map();
+  function compute(s,e){
+    const k=s+":"+e; if(memo.has(k)) return memo.get(k);
+    let h=map.get(k);
+    if(!h){ const m=childrenSplit(s,e); if(m===null) return null;
+      const l=compute(s,m), r=compute(m,e); if(!l||!r) return null;
+      h=sha256(cat(new Uint8Array([1]),l,r)); }
+    memo.set(k,h); return h;
+  }
+  const root=compute(0,n);
+  if(!root||!eq(root,rootHash)) return {ok:false,reason:"root hash mismatch"};
+  for(const [s,e,h] of proof.subtrees){ const c=compute(s,e); if(!c||!eq(c,h)) return {ok:false,reason:`subtree hash mismatch at [${s},${e})`}; }
+  return {ok:true,reason:"ok"};
+}
+
+/* ---------- baseline: MTC §4.4.1 consistency proof size ---------- */
+function subproof(log,start,end,lo,hi,known){
+  if(start===lo&&end===hi) return known?0:1;
+  const mid=childrenSplit(lo,hi); if(mid===null) return 0;
+  if(end<=mid) return subproof(log,start,end,lo,mid,known)+1;
+  if(start>=mid) return subproof(log,start,end,mid,hi,known)+1;
+  return subproof(log,mid,end,mid,hi,false)+1;
+}
+const baselineHashes=(log,subs,n)=>subs.reduce((t,[s,e])=>t+subproof(log,s,e,0,n,true),0);
+
+/* ---------- is a range a node of the size-n tree? ---------- */
+function isNode(s,e,n){
+  let cur=[0,n];
+  while(cur[0]!==s||cur[1]!==e){
+    const m=childrenSplit(cur[0],cur[1]); if(m===null) return false;
+    if(e<=m) cur=[cur[0],m]; else if(s>=m) cur=[m,cur[1]]; else return false;
+  }
+  return true;
+}
+function allNodes(n){ const out=[]; (function w(s,e,d){ out.push({s,e,d}); const m=childrenSplit(s,e); if(m!==null){w(s,m,d+1);w(m,e,d+1);} })(0,n,0); return out; }
+
+/* ---------- UI ---------- */
+const $=id=>document.getElementById(id);
+let STATE=null;
+
+function run(){
+  const n=+$("n").value, every=+$("every").value, ma=+$("ma").value;
+  const log=new MerkleLog(n);
+  const subs=activeSubtrees(n,every,ma);
+  if(!subs.length){ $("status").className="status fail"; $("status-t").textContent="no active landmark subtrees"; return; }
+  const proof=generate(log,subs,n);
+  const res=verify(proof,log.root(),n);
+  const baseH=baselineHashes(log,subs,n), bulkH=proof.tiles.length;
+  const nonNode=subs.filter(([s,e])=>!isNode(s,e,n)).length;
+  STATE={n,every,ma,log,subs,proof,res,baseH,bulkH,nonNode};
+  render();
+}
+
+function render(){
+  const {n,log,subs,proof,res,baseH,bulkH,nonNode}=STATE;
+  const st=$("status");
+  st.className="status "+(res.ok?"pass":"fail");
+  $("status-t").textContent=res.ok?"proof verifies against recomputed root":"rejected — "+res.reason;
+
+  $("stats").innerHTML=[
+    ["entries",n.toLocaleString()],
+    ["landmark subtrees",subs.length],
+    ["not tree nodes",nonNode],
+    ["proof tiles",bulkH],
+  ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+
+  const ratio=bulkH?baseH/bulkH:0;
+  $("size-stats").innerHTML=[
+    ["baseline hashes",baseH.toLocaleString()],
+    ["baseline bytes",(baseH*32).toLocaleString()+"<small> B</small>"],
+    ["bulk hashes",bulkH.toLocaleString()],
+    ["bulk bytes",(bulkH*32).toLocaleString()+"<small> B</small>"],
+    ["reduction",ratio.toFixed(2)+"<small>×</small>"],
+  ].map(([k,v])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  $("size-note").textContent =
+    `At these parameters the bulk proof is ${ratio.toFixed(2)}× smaller. The saving grows as landmarks `+
+    `get sparser and shrinks as they get denser, because proof material scales with the number of `+
+    `landmark boundaries, not with log(n) alone. The -00 draft claims a constant-size proof and roughly `+
+    `two orders of magnitude; neither survives measurement.`;
+
+  // subtree table
+  const tb=$("subs").querySelector("tbody");
+  tb.innerHTML=subs.slice(0,200).map(([s,e])=>{
+    const nd=isNode(s,e,n);
+    return `<tr><td>[${s}, ${e})</td><td class="num">${e-s}</td>`+
+      `<td><span class="tag ${nd?"node":"partial"}">${nd?"node":"not a node"}</span></td>`+
+      `<td class="num" style="color:var(--ink-faint)">${hex(log.node(s,e)).slice(0,12)}…</td></tr>`;
+  }).join("");
+
+  drawTree();
+}
+
+function drawTree(){
+  const {n,subs}=STATE, svg=$("tree");
+  const MAXN=96;
+  if(n>MAXN){
+    svg.innerHTML=""; svg.setAttribute("viewBox","0 0 10 10"); svg.style.height="0";
+    $("tree-note").textContent=`Tree drawing is shown for up to ${MAXN} entries — at ${n.toLocaleString()} it would be unreadable. Everything else on this page is still live. Drag "Log entries" down to see the structure.`;
+    return;
+  }
+  svg.style.height="";
+  const nodes=allNodes(n), maxD=Math.max(...nodes.map(x=>x.d));
+  const W=Math.max(680,n*22), unit=W/n, ROW=26, PAD=10;
+  const H=(maxD+1)*ROW+PAD*2+34;
+  svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("width",W); svg.setAttribute("height",H);
+  const tiles=new Set(tiling(subs,n).map(r=>r[0]+":"+r[1]));
+  const subSet=new Map(subs.map(([s,e])=>[s+":"+e,isNode(s,e,n)]));
+  let out="";
+  for(const {s,e,d} of nodes){
+    const k=s+":"+e, isTile=tiles.has(k), isSub=subSet.has(k);
+    const x=s*unit+1.2, w=(e-s)*unit-2.4, y=PAD+d*ROW;
+    const fill=isTile?"var(--tile)":"var(--node)";
+    const op=isTile?0.92:0.3;
+    out+=`<rect x="${x.toFixed(1)}" y="${y}" width="${Math.max(w,2).toFixed(1)}" height="18" rx="2" fill="${fill}" opacity="${op}"/>`;
+    if(isSub) out+=`<rect x="${(x-1.5).toFixed(1)}" y="${y-1.5}" width="${Math.max(w+3,3).toFixed(1)}" height="21" rx="3" fill="none" stroke="var(--ok)" stroke-width="1.5"/>`;
+  }
+  // partial landmark subtrees: no node to sit on — draw as floating dashed band
+  let ghost=0;
+  for(const [s,e] of subs){
+    if(subSet.get(s+":"+e)) continue;
+    const x=s*unit+1.2, w=(e-s)*unit-2.4, y=PAD+(maxD+1)*ROW+6;
+    out+=`<rect x="${(x-1.5).toFixed(1)}" y="${y}" width="${Math.max(w+3,3).toFixed(1)}" height="18" rx="3" fill="none" stroke="var(--partial)" stroke-width="1.5" stroke-dasharray="4 3"/>`;
+    ghost++;
+  }
+  if(ghost) out+=`<text x="4" y="${PAD+(maxD+1)*ROW+38}" fill="var(--partial)" font-family="IBM Plex Mono" font-size="11">${ghost} landmark subtree${ghost>1?"s":""} align to no node in this tree — the -00 construction cannot fold ${ghost>1?"them":"it"} into the root</text>`;
+  svg.innerHTML=out;
+  $("tree-note").textContent = ghost
+    ? "Blue tiles are what the proof actually transmits. Green outlines are landmark subtrees that happen to be tree nodes. The dashed amber bands below the tree are landmark subtrees with no corresponding node."
+    : "Blue tiles are what the proof transmits; green outlines are landmark subtrees. At these parameters every landmark subtree happens to be a tree node — raise the entry count or use a non-power-of-two landmark interval to produce partial ones.";
+}
+
+/* ---------- tamper suite ---------- */
+function tamper(){
+  if(!STATE) run();
+  const {n,log,subs}=STATE, root=log.root();
+  const base=()=>JSON.parse(JSON.stringify(generate(log,subs,n)),(k,v)=>
+    v&&v.type==="Buffer"?new Uint8Array(v.data):v);
+  const clone=()=>{const p=generate(log,subs,n);
+    return {treeSize:p.treeSize, subtrees:p.subtrees.map(x=>[x[0],x[1],new Uint8Array(x[2])]), tiles:p.tiles.map(t=>new Uint8Array(t))};};
+  const cases=[
+    ["honest proof",p=>p,true],
+    ["corrupted subtree hash",p=>{p.subtrees[(p.subtrees.length/2)|0][2]=sha256(new Uint8Array([1,2,3]));return p},false],
+    ["corrupted tile hash",p=>{p.tiles[0]=sha256(new Uint8Array([9]));return p},false],
+    ["dropped tile",p=>{p.tiles.pop();return p},false],
+    ["reordered tiles",p=>{if(p.tiles.length>1){const t=p.tiles[0];p.tiles[0]=p.tiles[1];p.tiles[1]=t}return p},false],
+    ["dropped subtree",p=>{p.subtrees.splice((p.subtrees.length/2)|0,1);return p},false],
+    ["wrong root",p=>p,false,sha256(new Uint8Array([255]))],
+  ];
+  const rows=cases.map(([name,mut,shouldPass,altRoot])=>{
+    const p=mut(clone());
+    const r=verify(p, altRoot||root, n);
+    const good=(r.ok===shouldPass);
+    return `<div><span class="r ${good?"ok":"bad"}">${good?"PASS":"FAIL"}</span>`+
+           `<span>${name}</span><span class="why">${r.ok?"accepted":r.reason}</span></div>`;
+  });
+  $("tamper-log").innerHTML=rows.join("");
+}
+
+/* ---------- wiring ---------- */
+for(const id of ["n","every","ma"]){
+  const el=$(id), lbl=$("v-"+(id==="n"?"n":id==="every"?"every":"ma"));
+  el.addEventListener("input",()=>{lbl.textContent=el.value;});
+  el.addEventListener("change",run);
+}
+$("run").addEventListener("click",run);
+$("tamper").addEventListener("click",tamper);
+$("preset-web").addEventListener("click",()=>{$("n").value=512;$("every").value=26;$("ma").value=40;
+  $("v-n").textContent=512;$("v-every").textContent=26;$("v-ma").textContent=40;run();});
+$("preset-small").addEventListener("click",()=>{$("n").value=29;$("every").value=5;$("ma").value=6;
+  $("v-n").textContent=29;$("v-every").textContent=5;$("v-ma").textContent=6;run();});
+run(); tamper();
+</script>
+</body>
+</html>
