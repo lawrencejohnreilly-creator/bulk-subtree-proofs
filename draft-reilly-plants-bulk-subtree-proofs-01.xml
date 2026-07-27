@@ -1,0 +1,609 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude"
+     category="std"
+     docName="draft-reilly-plants-bulk-subtree-proofs-01"
+     ipr="trust200902"
+     submissionType="IETF"
+     consensus="true"
+     version="3"
+     sortRefs="true"
+     symRefs="true"
+     tocInclude="true">
+
+  <front>
+    <title abbrev="Bulk Subtree Proofs">Bulk Subtree Consistency Proofs for Merkle Tree Certificates</title>
+    <seriesInfo name="Internet-Draft" value="draft-reilly-plants-bulk-subtree-proofs-01"/>
+    <author fullname="Lawrence J. Reilly" initials="L. J." surname="Reilly">
+      <organization>Independent</organization>
+      <address>
+        <email>lawrencejohnreilly@gmail.com</email>
+      </address>
+    </author>
+    <date year="2026" month="July" day="27"/>
+    <area>SEC</area>
+    <workgroup>PKI, Logs, And Tree Signatures</workgroup>
+    <keyword>merkle tree</keyword>
+    <keyword>certificate transparency</keyword>
+    <keyword>post-quantum</keyword>
+
+    <abstract>
+      <t>Merkle Tree Certificates require relying parties to periodically obtain a
+      set of active landmark subtrees and verify each is consistent with a
+      reference checkpoint of the issuance log. As specified, this requires one
+      subtree consistency proof per landmark subtree, and those proofs share a
+      large fraction of their interior nodes.</t>
+
+      <t>This document defines a bulk subtree consistency proof, which verifies an
+      entire set of landmark subtrees against a single reference checkpoint from
+      one shared set of hashes. It is a size optimization for the relying party
+      update channel and introduces no change to certificate verification or to
+      the security properties of Merkle Tree Certificates.</t>
+
+      <t>This revision replaces the construction published in -00, which was
+      incorrect. See <xref target="changes"/>.</t>
+    </abstract>
+  </front>
+
+  <middle>
+
+    <section anchor="introduction">
+      <name>Introduction</name>
+
+      <t>Merkle Tree Certificates <xref target="MTC"/> allow a relying party to
+      accept landmark-relative certificates, which carry an inclusion proof to a
+      landmark subtree and no signatures at all. This is the design's principal
+      size optimization, and it depends on the relying party holding a current,
+      verified set of active landmark subtrees.</t>
+
+      <t>Section 7.4 of <xref target="MTC"/> specifies how that set is established.
+      Before configuring subtrees as trusted, the relying party must obtain
+      assurance that each subtree is consistent with checkpoints observed by a
+      sufficient set of cosigners. Given a reference checkpoint and cosignatures
+      over it, this reduces to verifying, for each subtree, a subtree consistency
+      proof (Section 4.4 of <xref target="MTC"/>) between that subtree and the
+      reference checkpoint.</t>
+
+      <t>The number of subtrees involved is not small. A relying party retains up
+      to 2 * max_active_landmarks subtree hashes per CA. The example parameters
+      given in Section 6.3.1 of <xref target="MTC"/> -- a seven-day maximum
+      certificate lifetime with a landmark allocated hourly -- give a
+      max_active_landmarks of 169, and therefore up to 338 active landmark
+      subtrees.</t>
+
+      <t>Section 7.4 of <xref target="MTC"/> observes that these proofs have many
+      nodes in common and notes that a single proof verifying all the hashes at
+      once is possible. This document specifies such a proof. Measured against the
+      per-subtree baseline it reduces the consistency-proof component of a relying
+      party update by a factor of roughly 2.6 to 5, depending on landmark density;
+      see <xref target="sizes"/>.</t>
+
+      <section anchor="whats-shared">
+        <name>What the Proofs Share</name>
+
+        <t>The active landmark subtrees cover a single contiguous range of the log,
+        because landmark subtrees are constructed to cover consecutive intervals
+        (Section 6.3.1 of <xref target="MTC"/>). Their consistency proofs against a
+        common reference checkpoint therefore reconstruct the same root along
+        heavily overlapping paths, and the material above the point where two
+        subtrees' paths converge is identical between them.</t>
+
+        <t>The construction below exploits this by transmitting one shared set of
+        node hashes, chosen so that both the reference root and every individual
+        landmark subtree hash can be recomputed from it.</t>
+
+        <t>The relying party update channel is a broadcast channel: this material
+        is distributed periodically to every relying party that trusts the CA. In
+        the Web PKI that is a population measured in billions of clients,
+        refreshing on the order of hourly.</t>
+      </section>
+    </section>
+
+    <section anchor="conventions">
+      <name>Conventions and Definitions</name>
+
+      <t>The key words "<bcp14>MUST</bcp14>", "<bcp14>MUST NOT</bcp14>",
+      "<bcp14>REQUIRED</bcp14>", "<bcp14>SHALL</bcp14>",
+      "<bcp14>SHALL NOT</bcp14>", "<bcp14>SHOULD</bcp14>",
+      "<bcp14>SHOULD NOT</bcp14>", "<bcp14>RECOMMENDED</bcp14>",
+      "<bcp14>NOT RECOMMENDED</bcp14>", "<bcp14>MAY</bcp14>", and
+      "<bcp14>OPTIONAL</bcp14>" in this document are to be interpreted as
+      described in BCP 14 <xref target="RFC2119"/> <xref target="RFC8174"/> when,
+      and only when, they appear in all capitals, as shown here.</t>
+
+      <t>This document uses the notation, Merkle Tree definitions, and subtree
+      definitions of Section 4 of <xref target="MTC"/>, which extend Section 2.1 of
+      <xref target="RFC9162"/>. In particular HASH, HASH_SIZE, MTH, BIT_CEIL,
+      BIT_WIDTH, and the notation [start, end) for a subtree are used as defined
+      there.</t>
+
+      <t>A subtree [start, end) is <em>full</em> if end - start is a power of two,
+      and <em>partial</em> otherwise, per Section 4.1 of <xref target="MTC"/>.</t>
+
+      <t>The <em>split point</em> of a subtree [start, end) whose size is greater
+      than one is start + k, where k is the largest power of two strictly less than
+      end - start. This is the index at which the Merkle Tree Hash recursion of
+      Section 2.1.1 of <xref target="RFC9162"/> divides the node into its two
+      children. It is written SPLIT(start, end).</t>
+
+      <t>The following additional terms are used:</t>
+
+      <dl>
+        <dt>Covered range:</dt>
+        <dd>The half-open interval spanned by the union of a set of subtrees, when
+        that union is contiguous.</dd>
+        <dt>Breakpoint:</dt>
+        <dd>An endpoint of some subtree in the set being proven, or the endpoint of
+        the log itself.</dd>
+        <dt>Tile:</dt>
+        <dd>A full subtree in the shared decomposition carried by the proof.</dd>
+        <dt>Bulk subtree consistency proof:</dt>
+        <dd>A proof that every subtree in a given set is consistent with a given
+        checkpoint, verified as a unit.</dd>
+      </dl>
+    </section>
+
+    <section anchor="whyfull">
+      <name>Why the Decomposition Uses Full Subtrees</name>
+
+      <t>A full subtree [start, end) is a node of the Merkle Tree over D_n for
+      every n greater than or equal to end. A partial subtree is a node only when
+      n equals end (Section 4.2 of <xref target="MTC"/>).</t>
+
+      <t>This distinction governs the whole construction. Landmark subtrees are
+      produced by the covering procedure of Section 4.5 of <xref target="MTC"/>,
+      which returns a full left subtree and a possibly-partial right subtree. In a
+      reference checkpoint larger than the landmark's tree size, such a partial
+      subtree is not a node of the tree at all, and no sequence of pairwise hash
+      combinations over tree nodes will produce it or absorb it.</t>
+
+      <t>Consequently a bulk proof cannot be built by treating the landmark
+      subtrees themselves as a partition of the tree. It must be built over a
+      decomposition into full subtrees, from which both the root and each landmark
+      subtree hash can be recomputed independently. That is what
+      <xref target="construction"/> does.</t>
+    </section>
+
+    <section anchor="construction">
+      <name>Bulk Subtree Consistency Proofs</name>
+
+      <section anchor="overview">
+        <name>Overview</name>
+
+        <t>Let L be the set of subtrees to be proven and n the tree size of the
+        reference checkpoint.</t>
+
+        <ol>
+          <li>Collect the breakpoints: 0, n, and every endpoint of every subtree in
+          L.</li>
+          <li>Between each pair of consecutive breakpoints, decompose the interval
+          into full subtrees using FRONTIER (<xref target="frontier"/>). The
+          resulting tiles partition [0, n), are all nodes of the reference tree,
+          and refine every subtree boundary in L.</li>
+          <li>The proof carries the tile hashes and the claimed subtree hashes.
+          Tile ranges are not transmitted; the verifier derives them.</li>
+          <li>The verifier recomputes the reference root by descending the tree
+          from [0, n) and stopping at tiles, then recomputes each claimed subtree
+          hash by the same descent.</li>
+        </ol>
+
+        <t>Because every subtree boundary is a breakpoint, each subtree in L is
+        exactly a union of tiles, and its hash is recoverable whether it is full or
+        partial. Subtrees in L that are nested or that overlap require no special
+        handling.</t>
+      </section>
+
+      <section anchor="frontier">
+        <name>Frontier Decomposition</name>
+
+        <t>FRONTIER(s, e) returns the full subtrees covering [s, e), in ascending
+        order of start:</t>
+
+        <sourcecode type="python"><![CDATA[
+def FRONTIER(s, e):
+    """ Full subtrees covering [s, e), ascending by start. """
+    nodes = []
+    while s < e:
+        size = 1
+        while s % (size * 2) == 0 and s + size * 2 <= e:
+            size *= 2
+        nodes.append((s, s + size))
+        s += size
+    return nodes
+]]></sourcecode>
+
+        <t>Each returned node has a size that is a power of two and a start that is
+        a multiple of that size, so it satisfies Section 4.1 of
+        <xref target="MTC"/> and is full. FRONTIER(s, e) returns at most
+        2 * BIT_WIDTH(e) nodes, and returns the empty list when s equals e.</t>
+      </section>
+
+      <section anchor="tiling">
+        <name>Deriving the Tiling</name>
+
+        <t>Given a list of subtree ranges L and a tree size n, the tiling is derived
+        as follows:</t>
+
+        <sourcecode type="python"><![CDATA[
+def TILING(L, n):
+    """ Full subtrees partitioning [0, n), refined at every
+        endpoint appearing in L. """
+    points = {0, n}
+    for (start, end) in L:
+        points.add(start)
+        points.add(end)
+    breakpoints = sorted(points)
+    tiles = []
+    for p, q in zip(breakpoints, breakpoints[1:]):
+        tiles.extend(FRONTIER(p, q))
+    return tiles
+]]></sourcecode>
+
+        <t>Both the generator and the verifier <bcp14>MUST</bcp14> derive the tiling
+        with this procedure. The proof carries tile hashes in exactly the order
+        TILING returns the corresponding ranges.</t>
+      </section>
+
+      <section anchor="format">
+        <name>Proof Format</name>
+
+        <t>A bulk subtree consistency proof is defined below using the TLS
+        presentation language (Section 3 of <xref target="RFC8446"/>), following the
+        conventions of Section 6.1 of <xref target="MTC"/>:</t>
+
+        <sourcecode type="tls-presentation"><![CDATA[
+opaque HashValue[HASH_SIZE];
+
+struct {
+    uint64 start;
+    uint64 end;
+    HashValue hash;
+} SubtreeRef;
+
+struct {
+    uint64 tree_size;
+    SubtreeRef subtrees<1..2^16-1>;
+    HashValue tiles<1..2^16-1>;
+} BulkSubtreeProof;
+]]></sourcecode>
+
+        <t>tree_size <bcp14>MUST</bcp14> be the tree size of the reference
+        checkpoint.</t>
+
+        <t>subtrees <bcp14>MUST</bcp14> contain one entry for each subtree being
+        proven, in ascending order of start with ties broken by descending order of
+        end, with no duplicates. Each entry's hash is the subtree hash the relying
+        party is being asked to trust.</t>
+
+        <t>tiles <bcp14>MUST</bcp14> contain the hash of each range returned by
+        TILING(subtrees, tree_size), in the order returned.</t>
+      </section>
+
+      <section anchor="verify">
+        <name>Verification</name>
+
+        <t>Given a BulkSubtreeProof, a reference checkpoint root hash root_hash, and
+        that checkpoint's tree size n, a relying party verifies as follows.</t>
+
+        <ol>
+          <li>Check that tree_size equals n and that subtrees is non-empty. If
+          not, fail verification.</li>
+
+          <li>Check that the ranges in subtrees are in the required order, contain
+          no duplicates, and that each [start, end) satisfies Section 4.1 of
+          <xref target="MTC"/> with end less than or equal to n. If not, fail
+          verification.</li>
+
+          <li>Compute the expected tiling as TILING(subtrees, n). Check that the
+          number of entries in tiles equals the number of ranges returned. If not,
+          fail verification. Associate each tile hash with the corresponding derived
+          range.</li>
+
+          <li>
+            <t>Define COMPUTE(s, e) as follows:</t>
+            <ol>
+              <li>If [s, e) is a tile range, return its hash.</li>
+              <li>Otherwise, if e - s is one, fail verification.</li>
+              <li>Otherwise, let m be SPLIT(s, e) and return
+              HASH(0x01 || COMPUTE(s, m) || COMPUTE(m, e)).</li>
+            </ol>
+          </li>
+
+          <li>Check that COMPUTE(0, n) equals root_hash. If not, fail
+          verification.</li>
+
+          <li>For each entry of subtrees, check that COMPUTE(start, end) equals that
+          entry's hash. If not, fail verification.</li>
+
+          <li>If all checks pass, every subtree in subtrees is consistent with the
+          reference checkpoint, and the relying party <bcp14>MAY</bcp14> configure
+          them as trusted subtrees per Section 7.4 of <xref target="MTC"/>, subject
+          to its cosigner requirements being met on the reference checkpoint
+          itself.</li>
+        </ol>
+
+        <t>COMPUTE descends the reference tree using SPLIT, so the order of hash
+        combinations is fixed by the tree structure and there is no ambiguity for an
+        implementation to resolve. Implementations <bcp14>SHOULD</bcp14> memoize
+        COMPUTE, since the subtree checks in step 6 revisit nodes already computed
+        in step 5.</t>
+      </section>
+    </section>
+
+    <section anchor="sizes">
+      <name>Size Analysis</name>
+
+      <t>Proof size is the number of tiles, which is determined by the number of
+      distinct breakpoints and the width of the gaps between them. It is not
+      independent of the number of subtrees: each additional landmark boundary
+      refines the tiling. The saving relative to the baseline comes from sharing the
+      upper portions of the tree between subtrees, not from eliminating per-subtree
+      material altogether.</t>
+
+      <t>The following figures were produced with the reference implementation
+      described in <xref target="impl"/>, using a landmark allocation that yields
+      the 338 active landmark subtrees of the Section 6.3.1 example of
+      <xref target="MTC"/>. Baseline is the total size of one subtree consistency
+      proof per landmark subtree; bulk is the tile count. Both are counted as
+      transmitted hashes at 32 bytes each with SHA-256.</t>
+
+      <table>
+        <name>Measured proof sizes</name>
+        <thead>
+          <tr><th>Log entries</th><th>Subtrees</th><th>Baseline</th><th>Bulk</th><th>Reduction</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>5,000</td><td>334</td><td>107,776 B</td><td>21,344 B</td><td>5.05x</td></tr>
+          <tr><td>50,000</td><td>334</td><td>119,680 B</td><td>33,024 B</td><td>3.62x</td></tr>
+          <tr><td>500,000</td><td>334</td><td>129,056 B</td><td>45,184 B</td><td>2.86x</td></tr>
+          <tr><td>4,400,000</td><td>338</td><td>150,080 B</td><td>57,184 B</td><td>2.62x</td></tr>
+        </tbody>
+      </table>
+
+      <t>The subtree hashes themselves are excluded from both columns, since the
+      relying party retains them regardless; Section 6.3.1 of <xref target="MTC"/>
+      already accounts for them as 10,816 bytes at these parameters.</t>
+
+      <t>The reduction shrinks as the log grows relative to the number of landmarks,
+      because the tiles between consecutive landmark boundaries become deeper
+      decompositions. It is largest for deployments with sparse landmarks over a
+      small log and smallest for dense landmarks over a large one. Implementers
+      should measure against their own landmark allocation policy rather than
+      assuming the figures above.</t>
+    </section>
+
+    <section anchor="relationship">
+      <name>Relationship to draft-ietf-plants-merkle-tree-certs</name>
+
+      <t>This document is a companion optimization. It does not modify certificate
+      construction (Section 6 of <xref target="MTC"/>), certificate verification
+      (Section 7.2 of <xref target="MTC"/>), the log structure (Section 5 of
+      <xref target="MTC"/>), or the use of Merkle Tree certificates in TLS
+      (Section 8 of <xref target="MTC"/>).</t>
+
+      <t>It applies only to the establishment of trusted subtrees in Section 7.4 of
+      <xref target="MTC"/>, and only to the consistency-checking component of that
+      section. The requirement that the reference checkpoint be cosigned by a set of
+      cosigners sufficient to meet the relying party's policy (Section 7.3 of
+      <xref target="MTC"/>) is unchanged and is not addressed here.</t>
+
+      <t>Support is optional. A relying party that does not implement bulk proofs
+      continues to verify per-subtree consistency proofs as specified. A CA or
+      update service that does not produce bulk proofs is unaffected.</t>
+
+      <t>If the working group prefers, the mechanism described here could be
+      incorporated directly into Section 7.4 of <xref target="MTC"/> rather than
+      published separately.</t>
+    </section>
+
+    <section anchor="impl">
+      <name>Implementation Status</name>
+
+      <t>An independent reference implementation exists in Python and JavaScript. It
+      implements the Merkle Tree Hash of Section 2.1 of <xref target="RFC9162"/>,
+      the subtree definitions and covering procedure of Section 4 of
+      <xref target="MTC"/>, per-subtree consistency proof generation for the
+      baseline figures in <xref target="sizes"/>, and the construction in this
+      document.</t>
+
+      <t>The construction has been checked on 600 randomized combinations of log
+      size and landmark allocation. In each case every subtree hash asserted by the
+      proof was compared against direct recomputation of the Merkle Tree Hash from
+      the log, rather than against another implementation of the same proof
+      technique. Cases in which landmark subtrees are partial, nested, or
+      overlapping were confirmed to occur in the sample.</t>
+
+      <t>Tampering cases -- corrupted subtree hashes, corrupted tile hashes, dropped
+      tiles, reordered tiles, a dropped subtree entry, and verification against an
+      unrelated root -- were each confirmed to be rejected.</t>
+
+      <t>Test vectors have not yet been extracted into a stable, citable form. That
+      is expected in a subsequent revision.</t>
+    </section>
+
+    <section anchor="security">
+      <name>Security Considerations</name>
+
+      <t>The bulk proof asserts exactly what a set of individual subtree consistency
+      proofs asserts: that each subtree hash is consistent with the reference
+      checkpoint. It is a change in encoding and verification cost, not in the trust
+      decision.</t>
+
+      <t>Tile ranges are derived, not transmitted. The verifier computes the tiling
+      from the claimed subtree list and the reference tree size, so an attacker
+      cannot supply a decomposition of its own choosing. Implementations
+      <bcp14>MUST NOT</bcp14> accept tile ranges from the proof.</t>
+
+      <t>The subtree list is self-authenticating with respect to the tiling. Adding
+      or removing a subtree entry changes the derived breakpoints and therefore the
+      expected tile count and ranges, so a proof cannot be trimmed to conceal a
+      subtree or padded to smuggle one in without failing step 3 or step 5 of
+      <xref target="verify"/>.</t>
+
+      <t>Verification is all-or-nothing. A bulk proof either verifies every subtree
+      it carries or verifies none. A relying party <bcp14>MUST NOT</bcp14> accept a
+      partial result. Implementations should ensure a failed verification leaves the
+      previously trusted subtree set untouched rather than partially replaced, so
+      that a malformed or hostile update degrades to the relying party continuing
+      with its prior state.</t>
+
+      <t>Because the relying party continues to accept standalone certificates
+      (Section 6.2 of <xref target="MTC"/>) whenever it lacks a trusted subtree, a
+      failure of this mechanism is an availability and size regression, not an
+      authentication failure.</t>
+
+      <t>COMPUTE recurses to a depth bounded by BIT_WIDTH(n). Implementations
+      handling untrusted input should bound the number of distinct subtrees accepted
+      in a proof, since the tiling grows with the number of breakpoints and a proof
+      carrying many closely spaced subtrees will produce a correspondingly large
+      tiling.</t>
+
+      <t>The privacy considerations of Section 11 of <xref target="MTC"/> apply
+      unchanged. This document does not alter what the relying party fetches, only
+      how much of it.</t>
+    </section>
+
+    <section anchor="iana">
+      <name>IANA Considerations</name>
+      <t>This document has no IANA actions.</t>
+    </section>
+
+  </middle>
+
+  <back>
+
+    <references>
+      <name>References</name>
+
+      <references>
+        <name>Normative References</name>
+
+        <reference anchor="RFC2119" target="https://www.rfc-editor.org/info/rfc2119">
+          <front>
+            <title>Key words for use in RFCs to Indicate Requirement Levels</title>
+            <author initials="S." surname="Bradner" fullname="S. Bradner"/>
+            <date year="1997" month="March"/>
+          </front>
+          <seriesInfo name="BCP" value="14"/>
+          <seriesInfo name="RFC" value="2119"/>
+          <seriesInfo name="DOI" value="10.17487/RFC2119"/>
+        </reference>
+
+        <reference anchor="RFC8174" target="https://www.rfc-editor.org/info/rfc8174">
+          <front>
+            <title>Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words</title>
+            <author initials="B." surname="Leiba" fullname="B. Leiba"/>
+            <date year="2017" month="May"/>
+          </front>
+          <seriesInfo name="BCP" value="14"/>
+          <seriesInfo name="RFC" value="8174"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8174"/>
+        </reference>
+
+        <reference anchor="RFC8446" target="https://www.rfc-editor.org/info/rfc8446">
+          <front>
+            <title>The Transport Layer Security (TLS) Protocol Version 1.3</title>
+            <author initials="E." surname="Rescorla" fullname="E. Rescorla"/>
+            <date year="2018" month="August"/>
+          </front>
+          <seriesInfo name="RFC" value="8446"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8446"/>
+        </reference>
+
+        <reference anchor="RFC9162" target="https://www.rfc-editor.org/info/rfc9162">
+          <front>
+            <title>Certificate Transparency Version 2.0</title>
+            <author initials="B." surname="Laurie" fullname="B. Laurie"/>
+            <author initials="E." surname="Messeri" fullname="E. Messeri"/>
+            <author initials="R." surname="Stradling" fullname="R. Stradling"/>
+            <date year="2021" month="December"/>
+          </front>
+          <seriesInfo name="RFC" value="9162"/>
+          <seriesInfo name="DOI" value="10.17487/RFC9162"/>
+        </reference>
+
+        <reference anchor="MTC" target="https://datatracker.ietf.org/doc/draft-ietf-plants-merkle-tree-certs/">
+          <front>
+            <title>Merkle Tree Certificates</title>
+            <author initials="D." surname="Benjamin" fullname="David Benjamin"/>
+            <author initials="D." surname="O'Brien" fullname="Devon O'Brien"/>
+            <author initials="B. E." surname="Westerbaan" fullname="Bas Westerbaan"/>
+            <author initials="L." surname="Valenta" fullname="Luke Valenta"/>
+            <author initials="F." surname="Valsorda" fullname="Filippo Valsorda"/>
+            <date year="2026" month="May"/>
+          </front>
+          <seriesInfo name="Internet-Draft" value="draft-ietf-plants-merkle-tree-certs-04"/>
+        </reference>
+      </references>
+    </references>
+
+    <section anchor="changes" numbered="false">
+      <name>Changes from -00</name>
+
+      <t>The construction published in -00 was incorrect. It was withdrawn after
+      being implemented. The errors and their resolution are recorded here rather
+      than silently removed, since -00 is publicly archived.</t>
+
+      <t><strong>The laminarity argument was false.</strong> Section 3.2 of -00
+      asserted that the active landmark subtrees form a laminar family of nodes of
+      the reference checkpoint's Merkle Tree, and the construction folded them
+      upward into the root on that basis. Partial subtrees are not nodes of a larger
+      tree: per Section 4.2 of <xref target="MTC"/>, a partial subtree is contained
+      in MTH(D_n) only when n equals its end. The covering procedure of Section 4.5
+      of <xref target="MTC"/> explicitly returns a possibly-partial right subtree,
+      so landmark sets routinely contain subtrees that do not exist as nodes in the
+      reference tree and cannot be folded into its root by any sequence of pairwise
+      combinations. This is why <xref target="MTC"/> uses consistency proofs rather
+      than inclusion proofs here. <xref target="whyfull"/> now states the
+      distinction explicitly and the construction decomposes into full subtrees
+      instead.</t>
+
+      <t><strong>The merge rule was also wrong independently.</strong> Step 8 of the
+      -00 verification procedure merged adjacent equal-size pairs and then folded
+      any remainder from right to left. Right-to-left folding does not reconstruct
+      the root for valid partitions such as [(0,4), (4,8), (8,13)] in a tree of size
+      13, since it attempts to form [4,13), which is not a subtree. Verification now
+      descends the tree using SPLIT, so the combination order is determined by the
+      tree rather than by the verifier's search order.</t>
+
+      <t><strong>The size claim was wrong.</strong> -00 claimed proof material of
+      O(log n) independent of the number of subtrees, and a reduction of roughly two
+      orders of magnitude. Both followed from the incorrect construction. Proof size
+      scales with the number of landmark boundaries, because each boundary refines
+      the tiling. Measured reductions are between 2.6x and 5x over the parameter
+      range examined; see <xref target="sizes"/>.</t>
+
+      <t><strong>The nested-subtree machinery is gone.</strong> Stage 3 of -00, with
+      its NestedSubtreeProof structure and interior-node inclusion proofs, existed to
+      handle subtrees contained within other subtrees. Because the tiling refines
+      every subtree boundary, nested and overlapping subtrees are now handled by the
+      same descent as everything else, and the structure has been removed.</t>
+
+      <t>Size figures are now measured rather than estimated, and an implementation
+      status section has been added.</t>
+    </section>
+
+    <section anchor="open-questions" numbered="false">
+      <name>Open Questions</name>
+
+      <ul>
+        <li>Test vectors should be extracted into a stable form and included
+        directly in this document.</li>
+
+        <li>The tiling is derived from the subtree endpoints alone. A CA that knows
+        its own landmark allocation policy may be able to choose landmark tree sizes
+        that produce coarser tilings, reducing proof size further at no cost to
+        anything else. This interacts with Section 6.3.2 of <xref target="MTC"/> and
+        is worth investigating.</li>
+
+        <li>Whether the incremental case is worth specifying: a relying party
+        refreshing its trusted subtree set typically retains most of the previous
+        set, and a delta form of this proof may be substantially smaller than a full
+        one.</li>
+
+        <li>Whether a bound should be placed on the number of subtrees a relying
+        party will accept in a single proof, and if so what it should be.</li>
+      </ul>
+    </section>
+
+  </back>
+</rfc>
